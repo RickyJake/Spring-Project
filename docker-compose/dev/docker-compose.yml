@@ -1,0 +1,100 @@
+version: "3"
+services:
+  configserver:
+    image: 31121989/jake-configserver:latest
+    ports:
+      - 8071:8071
+    networks:
+      - product_net
+      - user_net
+  product:
+    image: 31121989/jake-product-service:latest
+    ports:
+      - 8091:8091
+    depends_on:
+      - mongo
+      - configserver
+    networks:
+      - product_net
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    restart: always
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      SPRING_DATA_MONGODB_DATABASE: productdb
+      SPRING_DATA_MONGODB_HOST: mongo
+      SPRING_DATA_MONGODB_PORT: 27017
+  user:
+    image: 31121989/jake-user-service:latest
+    ports:
+      - 8092:8092
+    depends_on:
+      - postgres
+      - configserver
+    networks:
+      - user_net
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    restart: always
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/userdb
+      SPRING_R2DBC_USERNAME: admin
+      SPRING_R2DBC_PASSWORD: admin
+  postgres:
+    image: postgres
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin
+      - POSTGRES_DB=userdb
+    volumes:
+      - ./docker-volume/db:/var/lib/postgresql/data
+    ports:
+      - 5432:5432
+    networks:
+      - user_net
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@jacob.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    volumes:
+      - ./docker-volume/pgadmin:/var/lib/pgadmin
+    ports:
+      - 9000:80
+    networks:
+      - user_net
+  mongo:
+    image: mongo
+    container_name: mongo
+    ports:
+      - 27017:27017
+    volumes:
+      - ./mongo:/data/db
+    networks:
+      - product_net
+  mongo-express:
+    image: mongo-express
+    ports:
+      - 8081:8081
+    restart: always
+    networks:
+      - product_net
+    depends_on:
+      - mongo
+
+networks:
+  product_net:
+  user_net:

@@ -1,0 +1,23 @@
+version: "3"
+services:
+  product:
+    image: jake/product-service
+    ports:
+      - 8079:8079
+    restart: always
+    depends_on:
+      - mongo
+  mongo:
+    image: mongo
+    container_name: mongo
+    ports:
+      - 27017:27017
+    volumes:
+      - ./mongo:/data/db
+  mongo-express:
+    image: mongo-express
+    ports:
+      - 8081:8081
+    restart: always
+    depends_on:
+      - mongo

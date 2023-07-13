@@ -1,0 +1,229 @@
+version: "3"
+services:
+  postgres:
+    image: postgres
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin
+      - POSTGRES_DB=userdb
+    volumes:
+      - ./docker-volume/db:/var/lib/postgresql/data
+    ports:
+      - 5432:5432
+    networks:
+      - user_net
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@jacob.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    volumes:
+      - ./docker-volume/pgadmin:/var/lib/pgadmin
+    ports:
+      - 9000:80
+    networks:
+      - user_net
+
+  mongo:
+    image: mongo
+    container_name: mongo
+    ports:
+      - 27017:27017
+    volumes:
+      - ./mongo:/data/db
+    networks:
+      - product_net
+
+  mongo-express:
+    image: mongo-express
+    ports:
+      - 8081:8081
+    restart: always
+    networks:
+      - product_net
+    depends_on:
+      - mongo
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - user_net
+      - product_net
+      - order_net
+
+  grafana:
+    image: "grafana/grafana:latest"
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    networks:
+      - user_net
+      - product_net
+      - order_net
+    depends_on:
+      - prometheus
+
+  zipkin:
+    image: openzipkin/zipkin
+    ports:
+      - "9411:9411"
+    networks:
+      - user_net
+      - product_net
+      - order_net
+
+  configserver:
+    image: 31121989/jake-configserver:latest
+    ports:
+      - 8071:8071
+    networks:
+      - product_net
+      - user_net
+      - order_net
+    depends_on:
+      - zipkin
+    environment:
+      SPRING_PROFILES_ACTIVE: default
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+
+  eurekaserver:
+    image: 31121989/jake-eurekaserver:latest
+    ports:
+      - 8070:8070
+    depends_on:
+      - configserver
+    networks:
+      - product_net
+      - user_net
+      - order_net
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    restart: always
+    environment:
+      SPRING_PROFILES_ACTIVE: default
+      SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      SERVER_PORT: 8070
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+
+  product-service:
+    image: 31121989/jake-product-service:latest
+    ports:
+      - 8091:8091
+    depends_on:
+      - mongo
+      - configserver
+      - eurekaserver
+    networks:
+      - product_net
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    restart: always
+    environment:
+      SPRING_PROFILES_ACTIVE: default
+      SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eurekaserver:8070/eureka/
+      SPRING_DATA_MONGODB_DATABASE: productdb
+      SPRING_DATA_MONGODB_HOST: mongo
+      SPRING_DATA_MONGODB_PORT: 27017
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+
+  user-service:
+    image: 31121989/jake-user-service:latest
+    ports:
+      - 8092:8092
+    depends_on:
+      - postgres
+      - configserver
+      - eurekaserver
+    networks:
+      - user_net
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    restart: always
+    environment:
+      SPRING_PROFILES_ACTIVE: default
+      SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eurekaserver:8070/eureka/
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/userdb
+      SPRING_R2DBC_USERNAME: admin
+      SPRING_R2DBC_PASSWORD: admin
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+
+  order-service:
+    image: 31121989/jake-order-service:latest
+    ports:
+      - 8093:8093
+    depends_on:
+      - configserver
+      - eurekaserver
+    networks:
+      - order_net
+      - product_net
+      - user_net
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    restart: always
+    environment:
+      SPRING_PROFILES_ACTIVE: default
+      SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eurekaserver:8070/eureka/
+      PRODUCT_SERVICE_URL: http://product-service:8091/product/
+      USER_SERVICE_URL: http://user-service:8092/user
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+
+  gatewayserver:
+    image: 31121989/jake-gatewayserver:latest
+    ports:
+      - 8072:8072
+    depends_on:
+      - configserver
+      - eurekaserver
+      - product-service
+      - user-service
+      - order-service
+    networks:
+      - product_net
+      - user_net
+      - order_net
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 45s
+        max_attempts: 3
+        window: 180s
+    restart: always
+    environment:
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eurekaserver:8070/eureka/
+      SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      SERVER_PORT: 8072
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+
+networks:
+  product_net:
+  user_net:
+  order_net:
